@@ -14,25 +14,6 @@ const http = require('http'),
   wsServerMgr = require('./lib/wsServerMgr'),
   ThrottleGroup = require('stream-throttle').ThrottleGroup;
 
-// const memwatch = require('memwatch-next');
-
-// setInterval(() => {
-//   console.log(process.memoryUsage());
-//   const rss = Math.ceil(process.memoryUsage().rss / 1000 / 1000);
-//   console.log('Program is using ' + rss + ' mb of Heap.');
-// }, 1000);
-
-// memwatch.on('stats', (info) => {
-//   console.log('gc !!');
-//   console.log(process.memoryUsage());
-//   const rss = Math.ceil(process.memoryUsage().rss / 1000 / 1000);
-//   console.log('GC !! Program is using ' + rss + ' mb of Heap.');
-
-//   // var heapUsed = Math.ceil(process.memoryUsage().heapUsed / 1000);
-//   // console.log("Program is using " + heapUsed + " kb of Heap.");
-//   // console.log(info);
-// });
-
 const T_TYPE_HTTP = 'http',
   T_TYPE_HTTPS = 'https',
   DEFAULT_TYPE = T_TYPE_HTTP;
@@ -47,7 +28,6 @@ const PROXY_STATUS_CLOSED = 'CLOSED';
  * @extends {events.EventEmitter}
  */
 class ProxyCore extends events.EventEmitter {
-
   /**
    * Creates an instance of ProxyCore.
    *
@@ -135,7 +115,7 @@ class ProxyCore extends events.EventEmitter {
   */
   handleExistConnections(socket) {
     const self = this;
-    self.socketIndex ++;
+    self.socketIndex++;
     const key = `socketIndex_${self.socketIndex}`;
     self.socketPool[key] = socket;
 
@@ -248,7 +228,6 @@ class ProxyCore extends events.EventEmitter {
     return self;
   }
 
-
   /**
    * close the proxy server
    *
@@ -273,6 +252,10 @@ class ProxyCore extends events.EventEmitter {
           const cltSocket = cltSocketItem[1];
           logUtil.printLog(`closing https cltSocket : ${key}`);
           cltSocket.end();
+        }
+
+        if (this.requestHandler.httpsServerMgr) {
+          this.requestHandler.httpsServerMgr.close();
         }
 
         if (this.socketPool) {
@@ -326,54 +309,47 @@ class ProxyServer extends ProxyCore {
   }
 
   start() {
+    if (this.recorder) {
+      this.recorder.setDbAutoCompact();
+    }
+
     // start web interface if neeeded
     if (this.proxyWebinterfaceConfig && this.proxyWebinterfaceConfig.enable) {
       this.webServerInstance = new WebInterface(this.proxyWebinterfaceConfig, this.recorder);
       // start web server
-      this.webServerInstance.start().then(() => {
-        // start proxy core
-        super.start();
-      })
-      .catch((e) => {
-        this.emit('error', e);
-      });
+      this.webServerInstance.start()
+      // start proxy core
+        .then(() => {
+          super.start();
+        })
+        .catch((e) => {
+          this.emit('error', e);
+        });
     } else {
       super.start();
     }
   }
 
   close() {
-    return new Promise((resolve, reject) => {
-      super.close()
-        .then((error) => {
-          if (error) {
-            resolve(error);
-          }
-        });
+    const self = this;
+    // release recorder
+    if (self.recorder) {
+      self.recorder.stopDbAutoCompact();
+      self.recorder.clear();
+    }
+    self.recorder = null;
 
-      if (this.recorder) {
-        logUtil.printLog('clearing cache file...');
-        this.recorder.clear();
-      }
-      const tmpWebServer = this.webServerInstance;
-      this.recorder = null;
-      this.webServerInstance = null;
-      if (tmpWebServer) {
-        logUtil.printLog('closing webserver...');
-        tmpWebServer.close((error) => {
-          if (error) {
-            console.error(error);
-            logUtil.printLog(`proxy web server close FAILED: ${error.message}`, logUtil.T_ERR);
-          } else {
-            logUtil.printLog(`proxy web server closed at ${this.proxyHostName} : ${this.webPort}`);
-          }
-
-          resolve(error);
-        })
-      } else {
-        resolve(null);
-      }
-    });
+    // close ProxyCore
+    return super.close()
+      // release webInterface
+      .then(() => {
+        if (self.webServerInstance) {
+          const tmpWebServer = self.webServerInstance;
+          self.webServerInstance = null;
+          logUtil.printLog('closing webInterface...');
+          return tmpWebServer.close();
+        }
+      });
   }
 }
 
